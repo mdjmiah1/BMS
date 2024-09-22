@@ -1,0 +1,569 @@
+<?php
+function bms_fetch_items_count($search_term = '', $collection_id = '') {
+    $url = 'https://archive.org/advancedsearch.php?q=';
+    
+    if (!empty($search_term)) {
+        $url .= urlencode($search_term);
+    }
+
+    if (!empty($collection_id)) {
+        $url .= '+collection:' . urlencode($collection_id);
+    }
+
+    $url .= '&rows=1&output=json';
+
+    $response = wp_remote_get($url);
+
+    if (is_wp_error($response)) {
+        return false;
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    return $data['response']['numFound'] ?? 0;
+}
+
+
+
+// Function to fetch items from Internet Archive based on search or collection
+function bms_fetch_items_from_internet_archive($search_term = '', $collection_id = '', $page = 1, $rows = 10) {
+    $url = 'https://archive.org/advancedsearch.php?q=';
+    
+    if (!empty($search_term)) {
+        $url .= urlencode($search_term);
+    }
+
+    if (!empty($collection_id)) {
+        $url .= '+collection:' . urlencode($collection_id);
+    }
+
+    $url .= '&fl[]=identifier,title,creator,year,description,mediatype'; // Include media type
+    $url .= '&rows=' . intval($rows);
+    $url .= '&page=' . intval($page);
+    $url .= '&output=json';
+
+    $response = wp_remote_get($url);
+
+    if (is_wp_error($response)) {
+        return false;
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    return $data['response']['docs'] ?? [];
+}
+
+
+// Function to import book from Internet Archive by item ID
+// Function to import book from Internet Archive
+function bms_import_book_from_internet_archive($item_id) {
+    $url = 'https://archive.org/metadata/' . $item_id;
+
+    // Fetch metadata from Internet Archive
+    $response = wp_remote_get($url);
+    if (is_wp_error($response)) {
+        return false; // Return error if unable to fetch data
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    // Check if valid data is returned
+    if (!isset($data['metadata'])) {
+        return false;
+    }
+
+    $metadata = $data['metadata'];
+
+    // Check if the book already exists
+    $existing_post_id = get_posts(array(
+        'post_type' => 'book',
+        'meta_query' => array(
+            array(
+                'key' => '_bms_book_archive',
+                'value' => sanitize_text_field($item_id),
+                'compare' => '='
+            )
+        ),
+        'posts_per_page' => 1,
+    ));
+
+    if ($existing_post_id) {
+        return false; // Book already exists, do not import again
+    }
+
+
+// Prepare the post content with metadata
+$post_content = '';
+
+
+// Function to generate the .txt file URL based on identifier
+function get_archive_txt_url($identifier) {
+    // Construct the URL using the identifier
+    return "https://archive.org/stream/$identifier/{$identifier}_djvu.txt";
+}
+
+// Assuming you have the metadata and the identifier is extracted from it
+if (isset($metadata['identifier'])) {
+    $identifier = esc_attr($metadata['identifier']); // Get the identifier from metadata
+
+    // Fetch the URL for the .txt file
+    $url = get_archive_txt_url($identifier);
+
+    // Fetch the HTML content from the URL
+    $html_content = file_get_contents($url);
+
+    if ($html_content !== false) {
+        // Convert the content to UTF-8 encoding
+        $html_content = mb_convert_encoding($html_content, 'HTML-ENTITIES', 'UTF-8');
+
+        // Load the HTML content into DOMDocument
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML($html_content);
+        libxml_clear_errors();
+
+        // Use XPath to find the specific <pre> tag within the container
+        $xpath = new DOMXPath($dom);
+        $pre_element = $xpath->query('//div[contains(@class, "container container-ia")]//pre')->item(0);
+
+        $main_content = '';
+
+        if ($pre_element) {
+            // Get the inner text of the <pre> element (this is plain text)
+            $pre_content = $pre_element->nodeValue;
+            $clean_content = trim($pre_content);
+            $main_content = '<p>' . htmlspecialchars($clean_content) . '</p>';
+        } else {
+            $main_content = "<p><strong>Error:</strong> No content found within the specified <pre> tag.</p>";
+        }
+
+        // Prepare the post content
+        $post_content = '';
+
+        if ($main_content) {
+            $post_content .= "<h3>Fetched Main Content</h3>";
+            $post_content .= $main_content;
+        }
+
+    } else {
+        $post_content .= "<p>Error fetching the file.</p>";
+    }
+} else {
+    $post_content .= "<p><strong>Error:</strong> Identifier not found in metadata.</p>";
+}
+
+// Output the post content
+echo $post_content;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Ensure the description is a string
+if (isset($metadata['description']) && is_string($metadata['description'])) {
+    $post_content .= sanitize_textarea_field($metadata['description']);
+} elseif (isset($metadata['description']) && is_array($metadata['description'])) {
+    $post_content .= sanitize_textarea_field(implode(' ', $metadata['description']));
+}
+
+// Append custom metadata to the content
+
+$post_content .= '<table itemscope itemtype="http://schema.org/Book" style="width:100%; border-collapse:collapse;">';
+
+// Ensure the description is a string
+if (isset($metadata['description']) && is_string($metadata['description'])) {
+    $post_content .= '<tr><td colspan="2">' . sanitize_textarea_field($metadata['description']) . '</td></tr>';
+} elseif (isset($metadata['description']) && is_array($metadata['description'])) {
+    $post_content .= '<tr><td colspan="2">' . sanitize_textarea_field(implode(' ', $metadata['description'])) . '</td></tr>';
+}
+
+$post_content .= '<tr><td colspan="2" id="header"><h3>Book Details</h3></td>';
+
+// Title
+if (isset($metadata['title'])) {
+    $post_content .= '<tr><td><strong>Title:</strong></td><td itemprop="name">' . esc_html($metadata['title']) . '</td></tr>';
+}
+
+// Author
+if (isset($metadata['creator'])) {
+    // If the creator is an array, we process it as an array
+    $creator_array = is_array($metadata['creator']) ? $metadata['creator'] : [$metadata['creator']];
+    
+    // Create search links for each author
+    $creator_links = array_map(function($creator) {
+        $encoded_creator = urlencode($creator); // URL encode the creator's name
+        return '<a href="https://localhost/mywebsite/?s=' . $encoded_creator . '" itemprop="author">' . esc_html($creator) . '</a>';
+    }, $creator_array);
+
+    // Join the creator links with commas
+    $creator = implode(', ', $creator_links);
+    $post_content .= '<tr><td><strong>Author:</strong></td><td>' . $creator . '</td></tr>';
+}
+
+
+
+// Year
+if (isset($metadata['year'])) {
+    $post_content .= '<tr><td><strong>Published:</strong></td><td itemprop="datePublished">' . esc_html($metadata['year']) . '</td></tr>';
+}
+
+// Subjects
+if (isset($metadata['subject'])) {
+    $subjects_array = is_array($metadata['subject']) ? $metadata['subject'] : [$metadata['subject']];
+    
+    $subject_links = array_map(function($subject) {
+        // Create a search link for each subject
+        $encoded_subject = urlencode($subject); // URL encode the subject
+        return '<a href="https://localhost/mywebsite/?s=' . $encoded_subject . '">' . esc_html($subject) . '</a>';
+    }, $subjects_array);
+
+    $subjects = implode(', ', $subject_links); // Join the links with a comma
+    $post_content .= '<tr><td><strong>Subjects:</strong></td><td>' . $subjects . '</td></tr>';
+}
+
+
+
+
+
+// Language
+if (isset($metadata['language'])) {
+    $language = is_array($metadata['language']) ? implode(', ', array_map('esc_html', $metadata['language'])) : esc_html($metadata['language']);
+    
+    // Create the search link for language
+    $encoded_language = urlencode($language); // URL encode the language for the search URL
+    $post_content .= '<tr><td><strong>Language:</strong></td><td itemprop="inLanguage"><a href="https://localhost/mywebsite/?s=' . $encoded_language . '">' . $language . '</a></td></tr>';
+}
+
+
+// Publisher
+if (isset($metadata['publisher'])) {
+    $publisher = is_array($metadata['publisher']) ? implode(', ', array_map('esc_html', $metadata['publisher'])) : esc_html($metadata['publisher']);
+    
+    // Create the search link for publisher
+    $encoded_publisher = urlencode($publisher); // URL encode the publisher for the search URL
+    $post_content .= '<tr><td><strong>Publisher:</strong></td><td itemprop="publisher"><a href="https://localhost/mywebsite/?s=' . $encoded_publisher . '">' . $publisher . '</a></td></tr>';
+}
+
+
+// Collection
+if (isset($metadata['collection'])) {
+    $collection_array = is_array($metadata['collection']) ? $metadata['collection'] : [$metadata['collection']];
+    $collection_links = array_map(function($collection) {
+        $encoded_collection = urlencode($collection); // URL encode each collection item
+        return '<a href="https://localhost/mywebsite/?s=' . $encoded_collection . '">' . esc_html($collection) . '</a>';
+    }, $collection_array);
+    $post_content .= '<tr><td><strong>Collection:</strong></td><td>' . implode(', ', $collection_links) . '</td></tr>';
+}
+
+// Contributor
+if (isset($metadata['contributor'])) {
+    $contributor_array = is_array($metadata['contributor']) ? $metadata['contributor'] : [$metadata['contributor']];
+    $contributor_links = array_map(function($contributor) {
+        $encoded_contributor = urlencode($contributor); // URL encode each contributor's name
+        return '<a href="https://localhost/mywebsite/?s=' . $encoded_contributor . '">' . esc_html($contributor) . '</a>';
+    }, $contributor_array);
+    $post_content .= '<tr><td><strong>Contributor:</strong></td><td>' . implode(', ', $contributor_links) . '</td></tr>';
+}
+
+// Pages Count
+if (isset($metadata['imagecount'])) {
+    $post_content .= '<tr><td><strong>Pages Count:</strong></td><td>' . esc_html($metadata['imagecount']) . '</td></tr>';
+}
+// Ppi
+if (isset($metadata['ppi'])) {
+    $post_content .= '<tr><td><strong>Ppi</strong></td><td>' . esc_html($metadata['ppi']) . '</td></tr>';
+}
+// Item Size
+if (isset($metadata['size'])) {
+    $post_content .= '<tr><td><strong>Item Size:</strong></td><td>' . esc_html($metadata['size']) . '</td></tr>';
+}
+// Image
+if (isset($metadata['identifier'])) {
+    $identifier = esc_attr($metadata['identifier']);
+    $image_url = 'https://archive.org/services/img/' . $identifier;
+
+    // Check if the title is set for the alt attribute
+    $alt_text = isset($metadata['title']) ? esc_attr($metadata['title']) : 'Cover Image';
+
+    // Display image in a table row with centered alignment
+    $post_content .= '<tr><td colspan="2" id="cover-image" style="text-align: center;">
+                        <img src="' . esc_url($image_url) . '" alt="' . $alt_text . '" style="max-width:100%; height:auto; display: inline-block;">
+                      </td></tr>';
+}
+
+
+// Added Date
+if (isset($metadata['addeddate'])) {
+    $post_content .= '<tr><td><strong>Added Date:</strong></td><td>' . esc_html($metadata['addeddate']) . '</td></tr>';
+}
+
+// ISBN
+if (isset($metadata['isbn'])) {
+    $isbn = is_array($metadata['isbn']) ? implode(', ', array_map('sanitize_text_field', $metadata['isbn'])) : sanitize_text_field($metadata['isbn']);
+    $post_content .= '<tr><td><strong>ISBN:</strong></td><td itemprop="isbn">' . esc_html($isbn) . '</td></tr>';
+}
+
+// Volume
+if (isset($metadata['volume'])) {
+    $post_content .= '<tr><td><strong>Volume:</strong></td><td>' . esc_html($metadata['volume']) . '</td></tr>';
+}
+
+
+// Ensure the title is set and sanitize it
+$title = isset($metadata['title']) ? sanitize_text_field($metadata['title']) : 'Unknown Title';
+
+// Identifier with Multiple Links
+if (isset($metadata['identifier'])) {
+    // Escape the identifier value
+    $identifier = esc_html($metadata['identifier']);
+    
+    // Escape the title for the Amazon link
+    $escaped_title = esc_attr($title);
+
+    // Create multiple links: Buy (Amazon), Archive, Download PDF, and Read Online
+    $post_content .= '
+    <tr>
+        
+        <td colspan="2" id="links">
+            <a href="https://www.amazon.in/s?k=' . $escaped_title . '&i=stripbooks&tag=228309-21" target="_blank">Buy</a>
+            <a href="https://archive.org/details/' . $identifier . '" target="_blank">Archive</a>
+            <a href="https://book.pdfforest.in/textbook/?ocaid=' . $identifier . '" target="_blank">Download PDF</a>
+            <a href="https://read.pdfforest.in/bookreader/online/preview.html?id=' . $identifier . '" target="_blank">Read Online</a>
+        </td>
+    </tr>';
+}
+
+
+// Close the table
+$post_content .= '</table>';
+
+    // Prepare post data
+    $post_data = array(
+        'post_title'    => sanitize_text_field($metadata['title'] ?? 'Untitled') . ' by ' . (isset($metadata['creator']) ? sanitize_text_field(implode(', ', (array) $metadata['creator'])) : 'Unknown'), // Include creator in title
+        'post_content'  => $post_content,
+        'post_status'   => 'publish',
+        'post_type'     => 'book',
+    );
+
+    // Insert the new book post
+    $post_id = wp_insert_post($post_data);
+
+    // Store custom fields only if post insertion was successful
+    if ($post_id && !is_wp_error($post_id)) {
+        // Store Internet Archive item ID
+        update_post_meta($post_id, '_bms_book_archive', sanitize_text_field($item_id));
+        // Other meta fields...
+        // Save the image URL
+        $image_url = 'https://archive.org/services/img/' . sanitize_text_field($item_id);
+         update_post_meta($post_id, 'fifu_image_url', $image_url);
+    }
+
+    return $post_id;
+}
+
+
+// Admin menu page for importing books
+function bms_import_books_menu_page() {
+    add_menu_page(
+        'Import Books',            // Page title
+        'Import Books',            // Menu title
+        'manage_options',          // Capability
+        'bms-import-books',        // Menu slug
+        'bms_import_books_page_content', // Callback function
+        'dashicons-download',      // Icon
+        20                         // Position in the menu
+    );
+}
+add_action('admin_menu', 'bms_import_books_menu_page');
+
+// Render the form and handle the import
+function bms_import_books_page_content() {
+    // Items per page
+    $items_per_page = 10;
+
+    ?>
+    <div class="wrap">
+        <h1>Import Books from Internet Archive</h1>
+        <form method="post" action="">
+            <h2>Search Items</h2>
+            <table class="form-table">
+                <tr valign="top">
+                    <th scope="row"><label for="search_term">Search Term</label></th>
+                    <td><input type="text" id="search_term" name="search_term" class="regular-text" value="<?php echo isset($_POST['search_term']) ? esc_attr($_POST['search_term']) : ''; ?>"></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row"><label for="collection_id">Collection ID</label></th>
+                    <td><input type="text" id="collection_id" name="collection_id" class="regular-text" value="<?php echo isset($_POST['collection_id']) ? esc_attr($_POST['collection_id']) : ''; ?>"></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row"><label for="item_url">Single Item URL</label></th>
+                    <td><input type="text" id="item_url" name="item_url" class="regular-text" value="<?php echo isset($_POST['item_url']) ? esc_attr($_POST['item_url']) : ''; ?>"></td>
+                </tr>
+            </table>
+            <?php submit_button('Search'); ?>
+        </form>
+
+        <?php
+        // Handle search form submission or maintain data across pages
+        $search_term = isset($_POST['search_term']) ? sanitize_text_field($_POST['search_term']) : (isset($_GET['search_term']) ? sanitize_text_field($_GET['search_term']) : '');
+        $collection_id = isset($_POST['collection_id']) ? sanitize_text_field($_POST['collection_id']) : (isset($_GET['collection_id']) ? sanitize_text_field($_GET['collection_id']) : '');
+        $item_url = isset($_POST['item_url']) ? sanitize_text_field($_POST['item_url']) : (isset($_GET['item_url']) ? sanitize_text_field($_GET['item_url']) : '');
+
+        // Get the current page number from the 'paged' query var
+        $current_page = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1; // Current page number
+
+        if (!empty($search_term) || !empty($collection_id) || !empty($item_url)) {
+            // Fetch total number of items for pagination
+            $total_items = bms_fetch_items_count($search_term, $collection_id);
+
+            // Fetch items for the current page
+            $items = bms_fetch_items_from_internet_archive($search_term, $collection_id, $current_page, $items_per_page);
+
+            if (!empty($items)) {
+                ?>
+                <h2>Search Results</h2>
+                <p>Total Items Found: <?php echo $total_items; ?></p>
+                <form method="post" action="">
+                    <table class="wp-list-table widefat fixed striped">
+                    <thead>
+                        <tr>
+                            <th class="check-column"><input type="checkbox" id="select-all"></th>
+                            <th>Import</th>
+                            <th>Title</th>
+                            <th>Author</th>
+                            <th>Media Type</th> <!-- Updated header -->
+                            
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($items as $item) : 
+                            $identifier = esc_attr($item['identifier']);
+                            $title = esc_html($item['title']);
+                            
+                            // Check if creator is an array, if so, implode it to create a comma-separated string.
+                            $creator = isset($item['creator']) ? (is_array($item['creator']) ? implode(', ', array_map('esc_html', $item['creator'])) : esc_html($item['creator'])) : 'Unknown';
+                            
+                            // Get media type; assuming 'mediatype' is available in the item array
+                            $media_type = esc_html($item['mediatype'] ?? 'N/A'); // Adjust this line
+                        ?>
+                        <tr>
+                            <th scope="row" class="check-column">
+                                <input type="checkbox" name="selected_items[]" value="<?php echo $identifier; ?>">
+                            </th>
+                            <td>
+                                <?php
+                                // Check if the book is already imported
+                                $existing_post_id = get_posts(array(
+                                    'post_type' => 'book',
+                                    'meta_query' => array(
+                                        array(
+                                            'key' => '_bms_book_archive',
+                                            'value' => sanitize_text_field($identifier),
+                                            'compare' => '='
+                                        )
+                                    ),
+                                    'posts_per_page' => 1,
+                                ));
+
+                                if ($existing_post_id) {
+                                    echo '<span style="color: green;">Already Imported</span>'; // You can also use an icon here
+                                } else {
+                                    echo '<span style="color: red;">Not Imported</span>';
+                                }
+                                ?>
+                            </td>
+                            <td><?php echo $title; ?></td>
+                            <td><?php echo $creator; ?></td>
+                            <td><?php echo $media_type; ?></td>
+ 
+                        </tr>
+
+
+                    <?php endforeach; ?>
+                    </tbody>
+                    </table>
+                    <input type="hidden" name="search_term" value="<?php echo esc_attr($search_term); ?>">
+                    <input type="hidden" name="collection_id" value="<?php echo esc_attr($collection_id); ?>">
+                    <input type="hidden" name="item_url" value="<?php echo esc_attr($item_url); ?>">
+                    <?php submit_button('Import Selected Books'); ?>
+                </form>
+
+                <?php
+                // Pagination controls
+                $total_pages = ceil($total_items / $items_per_page);
+                if ($total_pages > 1) {
+                    echo '<div class="tablenav"><div class="tablenav-pages">';
+                    echo paginate_links(array(
+                        'base' => add_query_arg(array(
+                            'paged' => '%#%',
+                            'search_term' => urlencode($search_term),
+                            'collection_id' => urlencode($collection_id),
+                            'item_url' => urlencode($item_url),
+                        )),
+                        'format' => '',
+                        'prev_text' => __('&laquo; Previous'),
+                        'next_text' => __('Next &raquo;'),
+                        'total' => $total_pages,
+                        'current' => $current_page,
+                    ));
+                    echo '</div></div>';
+                }
+            } else {
+                echo '<p>No items found for your search.</p>';
+            }
+        }
+
+        // Handle bulk import of selected items
+        if (isset($_POST['selected_items']) && is_array($_POST['selected_items'])) {
+            $selected_items = array_map('sanitize_text_field', $_POST['selected_items']);
+
+            foreach ($selected_items as $item_id) {
+                $post_id = bms_import_book_from_internet_archive($item_id);
+                if ($post_id) {
+                    $edit_link = get_edit_post_link($post_id); // Get the edit link
+                    $view_link = get_permalink($post_id); // Get the view link
+                    echo '<div class="updated"><p>Book with ID ' . esc_html($item_id) . ' was successfully imported. <a href="' . esc_url($view_link) . '" target="_blank">View Book</a> | <a href="' . esc_url($edit_link) . '">Edit Book</a></p></div>';
+                } else {
+                    // If the post_id is false, try to get an existing post
+                    $existing_post_id = get_posts(array(
+                        'post_type' => 'book',
+                        'meta_query' => array(
+                            array(
+                                'key' => '_bms_book_archive',
+                                'value' => sanitize_text_field($item_id),
+                                'compare' => '='
+                            )
+                        ),
+                        'posts_per_page' => 1,
+                    ));
+                
+                    if ($existing_post_id) {
+                        $view_link = get_permalink($existing_post_id[0]->ID); // Get the view link
+                        $edit_link = get_edit_post_link($existing_post_id[0]->ID); // Get the edit link
+                        echo '<div class="error"><p>Failed to import book with ID ' . esc_html($item_id) . '. It already exists. <a href="' . esc_url($view_link) . '" target="_blank">View Book</a> | <a href="' . esc_url($edit_link) . '">Edit Book</a></p></div>';
+                    } else {
+                        echo '<div class="error"><p>Failed to import book with ID ' . esc_html($item_id) . '.</p></div>';
+                    }
+                    
+                }
+                
+                
+            }
+        }
+        ?>
+    </div>
+    <?php
+}
+
