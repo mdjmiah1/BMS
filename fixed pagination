@@ -1,0 +1,297 @@
+<?php
+function bms_fetch_items_count($search_term = '', $collection_id = '') {
+    // URL for counting total number of items
+    $url = 'https://archive.org/advancedsearch.php?q=';
+    
+    // Add search term to the query
+    if (!empty($search_term)) {
+        $url .= urlencode($search_term);
+    }
+
+    // Add collection ID if provided
+    if (!empty($collection_id)) {
+        $url .= '+collection:' . urlencode($collection_id);
+    }
+
+    // Fetch only one result to get the total count
+    $url .= '&rows=1&output=json';
+
+    // Fetch data from the API
+    $response = wp_remote_get($url);
+
+    // Check for errors
+    if (is_wp_error($response)) {
+        return false;  // Return false if there's an error
+    }
+
+    // Retrieve the response body
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    // Return the total number of items
+    return $data['response']['numFound'] ?? 0;
+}
+
+// Function to fetch items from Internet Archive based on search or collection
+function bms_fetch_items_from_internet_archive($search_term = '', $collection_id = '', $page = 1, $rows = 10) {
+    // URL for fetching items with pagination
+    $url = 'https://archive.org/advancedsearch.php?q=';
+    
+    // Add search term to the query
+    if (!empty($search_term)) {
+        $url .= urlencode($search_term);
+    }
+
+    // Add collection ID if provided
+    if (!empty($collection_id)) {
+        $url .= '+collection:' . urlencode($collection_id);
+    }
+
+    // Fetch items with pagination
+    $url .= '&fl[]=identifier,title,creator,year,description';
+    $url .= '&rows=' . intval($rows);  // Number of items per page
+    $url .= '&page=' . intval($page);  // Current page
+    $url .= '&output=json';  // JSON output
+
+    // Fetch data from the API
+    $response = wp_remote_get($url);
+
+    // Check for errors
+    if (is_wp_error($response)) {
+        return false;  // Return false if there's an error
+    }
+
+    // Retrieve the response body
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    // Return the fetched items
+    return $data['response']['docs'] ?? [];
+}
+
+
+
+// Function to import book from Internet Archive by item ID
+// Function to import book from Internet Archive
+function bms_import_book_from_internet_archive($item_id) {
+    $url = 'https://archive.org/metadata/' . $item_id;
+
+    // Fetch metadata from Internet Archive
+    $response = wp_remote_get($url);
+    if (is_wp_error($response)) {
+        return false; // Return error if unable to fetch data
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+
+    // Check if valid data is returned
+    if (!isset($data['metadata'])) {
+        return false;
+    }
+
+    $metadata = $data['metadata'];
+
+    // Check if the book already exists
+    $existing_post_id = get_posts(array(
+        'post_type' => 'book',
+        'meta_query' => array(
+            array(
+                'key' => '_bms_book_archive',
+                'value' => sanitize_text_field($item_id),
+                'compare' => '='
+            )
+        ),
+        'posts_per_page' => 1,
+    ));
+
+    if ($existing_post_id) {
+        return false; // Book already exists, do not import again
+    }
+
+    // Prepare the post content with metadata
+    $post_content = '';
+
+    // Ensure the description is a string
+    if (isset($metadata['description']) && is_string($metadata['description'])) {
+        $post_content .= sanitize_textarea_field($metadata['description']);
+    } elseif (isset($metadata['description']) && is_array($metadata['description'])) {
+        $post_content .= sanitize_textarea_field(implode(' ', $metadata['description']));
+    }
+
+    // Append custom metadata to the content
+    $post_content .= '<h3>Book Details</h3>';
+    
+    // Add other metadata similarly...
+    if (isset($metadata['title'])) {
+        $post_content .= '<p><strong>Title:</strong> ' . esc_html($metadata['title']) . '</p>';
+    }
+    // Continue adding other metadata...
+
+    // Prepare post data
+    $post_data = array(
+        'post_title'    => sanitize_text_field($metadata['title'] ?? 'Untitled'),
+        'post_content'  => $post_content,
+        'post_status'   => 'publish',
+        'post_type'     => 'book',
+    );
+
+    // Insert the new book post
+    $post_id = wp_insert_post($post_data);
+
+    // Store custom fields only if post insertion was successful
+    if ($post_id && !is_wp_error($post_id)) {
+        // Store Internet Archive item ID
+        update_post_meta($post_id, '_bms_book_archive', sanitize_text_field($item_id));
+        // Other meta fields...
+        // Save the image URL
+        $image_url = 'https://archive.org/services/img/' . sanitize_text_field($item_id);
+         update_post_meta($post_id, 'fifu_image_url', $image_url);
+    }
+
+    return $post_id;
+}
+
+
+// Admin menu page for importing books
+function bms_import_books_menu_page() {
+    add_menu_page(
+        'Import Books',            // Page title
+        'Import Books',            // Menu title
+        'manage_options',          // Capability
+        'bms-import-books',        // Menu slug
+        'bms_import_books_page_content', // Callback function
+        'dashicons-download',      // Icon
+        20                         // Position in the menu
+    );
+}
+add_action('admin_menu', 'bms_import_books_menu_page');
+
+// Render the form and handle the import
+function bms_import_books_page_content() {
+    // Items per page
+    $items_per_page = 10;
+
+    ?>
+    <div class="wrap">
+        <h1>Import Books from Internet Archive</h1>
+        <form method="post" action="">
+            <h2>Search Items</h2>
+            <table class="form-table">
+                <tr valign="top">
+                    <th scope="row"><label for="search_term">Search Term</label></th>
+                    <td><input type="text" id="search_term" name="search_term" class="regular-text" value="<?php echo isset($_POST['search_term']) ? esc_attr($_POST['search_term']) : ''; ?>"></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row"><label for="collection_id">Collection ID</label></th>
+                    <td><input type="text" id="collection_id" name="collection_id" class="regular-text" value="<?php echo isset($_POST['collection_id']) ? esc_attr($_POST['collection_id']) : ''; ?>"></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row"><label for="item_url">Single Item URL</label></th>
+                    <td><input type="text" id="item_url" name="item_url" class="regular-text" value="<?php echo isset($_POST['item_url']) ? esc_attr($_POST['item_url']) : ''; ?>"></td>
+                </tr>
+            </table>
+            <?php submit_button('Search'); ?>
+        </form>
+
+        <?php
+        // Handle search form submission or maintain data across pages
+        $search_term = isset($_POST['search_term']) ? sanitize_text_field($_POST['search_term']) : (isset($_GET['search_term']) ? sanitize_text_field($_GET['search_term']) : '');
+        $collection_id = isset($_POST['collection_id']) ? sanitize_text_field($_POST['collection_id']) : (isset($_GET['collection_id']) ? sanitize_text_field($_GET['collection_id']) : '');
+        $item_url = isset($_POST['item_url']) ? sanitize_text_field($_POST['item_url']) : (isset($_GET['item_url']) ? sanitize_text_field($_GET['item_url']) : '');
+
+        // Get the current page number from the 'paged' query var
+        $current_page = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1; // Current page number
+
+        if (!empty($search_term) || !empty($collection_id) || !empty($item_url)) {
+            // Fetch total number of items for pagination
+            $total_items = bms_fetch_items_count($search_term, $collection_id);
+
+            // Fetch items for the current page
+            $items = bms_fetch_items_from_internet_archive($search_term, $collection_id, $current_page, $items_per_page);
+
+            if (!empty($items)) {
+                ?>
+                <h2>Search Results</h2>
+                <p>Total Items Found: <?php echo $total_items; ?></p>
+                <form method="post" action="">
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th class="check-column"><input type="checkbox" id="select-all"></th>
+                                <th>Title</th>
+                                <th>Author</th>
+                                <th>Year</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($items as $item) : 
+                                $identifier = esc_attr($item['identifier']);
+                                $title = esc_html($item['title']);
+                                
+                                // Check if creator is an array, if so, implode it to create a comma-separated string.
+                                $creator = isset($item['creator']) ? (is_array($item['creator']) ? implode(', ', array_map('esc_html', $item['creator'])) : esc_html($item['creator'])) : 'Unknown';
+                                
+                                $year = esc_html($item['year'] ?? 'N/A');
+                            ?>
+                            <tr>
+                                <th scope="row" class="check-column"><input type="checkbox" name="selected_items[]" value="<?php echo $identifier; ?>"></th>
+                                <td><?php echo $title; ?></td>
+                                <td><?php echo $creator; ?></td>
+                                <td><?php echo $year; ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <input type="hidden" name="search_term" value="<?php echo esc_attr($search_term); ?>">
+                    <input type="hidden" name="collection_id" value="<?php echo esc_attr($collection_id); ?>">
+                    <input type="hidden" name="item_url" value="<?php echo esc_attr($item_url); ?>">
+                    <?php submit_button('Import Selected Books'); ?>
+                </form>
+
+                <?php
+                // Pagination controls
+                $total_pages = ceil($total_items / $items_per_page);
+                if ($total_pages > 1) {
+                    echo '<div class="tablenav"><div class="tablenav-pages">';
+                    echo paginate_links(array(
+                        'base' => add_query_arg(array(
+                            'paged' => '%#%',
+                            'search_term' => urlencode($search_term),
+                            'collection_id' => urlencode($collection_id),
+                            'item_url' => urlencode($item_url),
+                        )),
+                        'format' => '',
+                        'prev_text' => __('&laquo; Previous'),
+                        'next_text' => __('Next &raquo;'),
+                        'total' => $total_pages,
+                        'current' => $current_page,
+                    ));
+                    echo '</div></div>';
+                }
+            } else {
+                echo '<p>No items found for your search.</p>';
+            }
+        }
+
+        // Handle bulk import of selected items
+        if (isset($_POST['selected_items']) && is_array($_POST['selected_items'])) {
+            $selected_items = array_map('sanitize_text_field', $_POST['selected_items']);
+
+            foreach ($selected_items as $item_id) {
+                $post_id = bms_import_book_from_internet_archive($item_id);
+                if ($post_id) {
+                    echo '<div class="updated"><p>Book with ID ' . esc_html($item_id) . ' was successfully imported.</p></div>';
+                } else {
+                    echo '<div class="error"><p>Failed to import book with ID ' . esc_html($item_id) . '.</p></div>';
+                }
+            }
+        }
+        ?>
+    </div>
+    <?php
+}
+
+
+
+
