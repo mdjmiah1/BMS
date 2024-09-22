@@ -1,0 +1,29 @@
+// Render the form and handle the import
+function bms_import_books_page_content() {
+    ?>
+    <div class="wrap">
+        <h1>Import Book from Internet Archive</h1>
+        <form method="post" action="">
+            <table class="form-table">
+                <tr valign="top">
+                    <th scope="row"><label for="item_id">Internet Archive Item ID</label></th>
+                    <td><input type="text" id="item_id" name="item_id" value="" class="regular-text" required></td>
+                </tr>
+            </table>
+            <?php submit_button('Import Book'); ?>
+        </form>
+    </div>
+    <?php
+
+    // Handle form submission
+    if (isset($_POST['item_id']) && !empty($_POST['item_id'])) {
+        $item_id = sanitize_text_field($_POST['item_id']);
+        $post_id = bms_import_book_from_internet_archive($item_id);
+
+        if ($post_id) {
+            echo '<div class="updated"><p>Book imported successfully! <a href="' . get_edit_post_link($post_id) . '">Edit Book</a></p></div>';
+        } else {
+            echo '<div class="error"><p>Failed to import book. Please check the Item ID and try again.</p></div>';
+        }
+    }
+}
