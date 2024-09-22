@@ -1,0 +1,52 @@
+// Fetch the HTML content from the URL
+$url = 'https://archive.org/stream/MountainsBeyondMountains-LifeOfDoctorPaulFarmer/7.MountainsBeyondMountains-TracyKidderlifeOfPaulFarmer_djvu.txt';
+$html_content = file_get_contents($url);
+
+if ($html_content !== false) {
+    // Convert the content to UTF-8 encoding
+    $html_content = mb_convert_encoding($html_content, 'HTML-ENTITIES', 'UTF-8');
+
+    // Load the HTML content into DOMDocument
+    $dom = new DOMDocument();
+
+    // Suppress warnings caused by malformed HTML
+    libxml_use_internal_errors(true);
+
+    // Load the HTML content
+    $dom->loadHTML($html_content);
+    libxml_clear_errors();
+
+    // Use XPath to find the specific <pre> tag within the container
+    $xpath = new DOMXPath($dom);
+    $pre_element = $xpath->query('//div[contains(@class, "container container-ia")]//pre')->item(0);
+
+    $main_content = '';
+
+    if ($pre_element) {
+        // Get the inner text of the <pre> element (this is plain text)
+        $pre_content = $pre_element->nodeValue;
+
+        // Remove any unwanted characters (e.g., line breaks or excess spacing)
+        $clean_content = trim($pre_content);
+
+        // Wrap the cleaned content in <p> tags without converting newlines to <br>
+        $main_content = '<p>' . htmlspecialchars($clean_content) . '</p>';
+    } else {
+        $main_content = "<p><strong>Error:</strong> No content found within the specified <pre> tag.</p>";
+    }
+
+    // Prepare the post content
+    $post_content = '';
+
+    // Add the fetched text content to the post content
+    if ($main_content) {
+        $post_content .= "<h3>Fetched Main Content</h3>";
+        $post_content .= $main_content;
+    }
+
+} else {
+    $post_content .= "<p>Error fetching the file.</p>";
+}
+
+// Output the post content
+echo $post_content;
