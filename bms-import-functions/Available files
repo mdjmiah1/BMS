@@ -1,0 +1,53 @@
+// Check for available files from the metadata
+if (isset($data['files']) && !empty($data['files'])) {
+    $supportedFileExtensions = ['.pdf', '.epub', '.txt', '.torrent', '.gz', '.zip', '.mp4', '.mkv', '.m3u', '.mp3', '.flac'];
+
+    $pdfFiles = [];
+    $otherFiles = [];
+
+    foreach ($data['files'] as $file) {
+        $fileName = $file['name'];
+        $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+
+        if (in_array('.' . $fileExtension, $supportedFileExtensions)) {
+            if ($fileExtension === 'pdf') {
+                $pdfFiles[] = $file;
+            } else {
+                $otherFiles[] = $file;
+            }
+        }
+    }
+
+    // Merge pdf files and other files
+    $supportedFiles = array_merge($pdfFiles, $otherFiles);
+
+    // Start displaying files in the content
+    if (!empty($supportedFiles)) {
+        // Button for collapsing
+        $post_content .= '<h3>';
+        $post_content .= '<button class="btn btn-primary" type="button" data-toggle="collapse" data-target="#availableFiles" aria-expanded="false" aria-controls="availableFiles">Available Files</button>';
+        $post_content .= '</h3>';
+        
+        // Collapsible content
+        $post_content .= '<div class="collapse" id="availableFiles">';
+        $post_content .= '<ul class="list-unstyled">';
+
+        foreach ($supportedFiles as $file) {
+            $fileName = esc_html($file['name']);
+            $fileLink = esc_url("https://archive.org/download/$item_id/$fileName");
+
+            // Retrieve file size and convert to MB or GB
+            $fileSize = isset($file['size']) ? formatSizeUnits($file['size']) : 'Unknown';
+
+            $post_content .= "<li><a href='{$fileLink}' target='_blank'>{$fileName}</a> ({$fileSize})</li>";
+        }
+
+        $post_content .= '</ul>';
+        $post_content .= '</div>'; // Close collapse div
+    } else {
+        $post_content .= '<p>No supported files available for download.</p>';
+    }
+} else {
+    // If no files are available
+    $post_content .= '<p>No files available for this item.</p>';
+}
