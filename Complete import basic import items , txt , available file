@@ -144,9 +144,9 @@ function bms_import_book_and_display_files_with_text_from_internet_archive($item
                 $clean_content = trim($pre_content);
 
                 // Wrap the cleaned content in <p> tags
-                $main_content = '<p id="book-txt-content">' . htmlspecialchars($clean_content) . '</p>';
+                $main_content = '<div class="book-txt-content">' . htmlspecialchars($clean_content) . '</div>';
             } else {
-                $main_content = "<p><strong>Error:</strong> No content found within the specified <pre> tag.</p>";
+                $main_content = "<p><strong>Error:</strong> No content found within the specified <strong> tag.</strong></p>";
             }
 
             // Add the fetched text content to the post content
