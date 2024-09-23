@@ -1,0 +1,75 @@
+    // Initialize variable for the txt file URL
+    $txt_url = '';
+
+    // Check for available files from the metadata
+    if (isset($data['files']) && !empty($data['files'])) {
+        foreach ($data['files'] as $file) {
+            // Check for .txt file
+            if (pathinfo($file['name'], PATHINFO_EXTENSION) === 'txt') {
+                $txt_url = 'https://archive.org/stream/' . sanitize_text_field($item_id) . '/' . urlencode($file['name']);
+                break; // Exit loop after finding the first .txt file
+            }
+        }
+    }
+
+    // Fetch the HTML content from the dynamically generated URL if the txt_url is set
+    if ($txt_url) {
+        $html_content = @file_get_contents($txt_url);
+
+        if ($html_content !== false) {
+            // Convert the content to UTF-8 encoding
+            $html_content = mb_convert_encoding($html_content, 'HTML-ENTITIES', 'UTF-8');
+
+            // Load the HTML content into DOMDocument
+            $dom = new DOMDocument();
+            libxml_use_internal_errors(true); // Suppress warnings
+
+            // Load the HTML content
+            $dom->loadHTML($html_content);
+            libxml_clear_errors();
+
+            // Use XPath to find the specific <pre> tag inside the container
+            $xpath = new DOMXPath($dom);
+            $pre_element = $xpath->query('//div[contains(@class, "container container-ia")]//pre')->item(0);
+
+            $main_content = '';
+
+            if ($pre_element) {
+                // Get the inner text of the <pre> element (this is plain text)
+                $pre_content = $pre_element->nodeValue;
+
+                // Clean content (e.g., line breaks, excess spacing)
+                $clean_content = trim($pre_content);
+
+                // Limit text length to avoid errors from very large files
+                $max_length = 10000; // Adjust this limit as needed
+                if (strlen($clean_content) > $max_length) {
+                    // If content is too long, truncate and add '...'
+                    $clean_content = substr($clean_content, 0, $max_length) . '...';
+                }
+
+                // Wrap the cleaned content inside a Bootstrap collapsible component
+                $main_content = '
+                    <div class="book-txt-content">
+                        <button class="btn btn-primary" type="button" data-toggle="collapse" data-target="#collapseTxtContent" aria-expanded="false" aria-controls="collapseTxtContent">
+                            Show/Hide Book Content
+                        </button>
+                        <div class="collapse" id="collapseTxtContent">
+                            <div class="card card-body">' . htmlspecialchars($clean_content) . '</div>
+                        </div>
+                    </div>';
+            } else {
+                $main_content = "<p><strong>Error:</strong> No content found within the specified <pre> tag.</p>";
+            }
+
+            // Add the fetched text content to the post content
+            if ($main_content) {
+                $post_content .= "<h3>Fetched Main Content</h3>";
+                $post_content .= $main_content;
+            }
+        } else {
+            $post_content .= "<p>Error fetching the file.</p>";
+        }
+    } else {
+        $post_content .= "<p>No .txt file available for this item.</p>";
+    }
